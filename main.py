@@ -320,7 +320,7 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
-@tree.command(name="Lappland", description="Ask Lappland something")
+@tree.command(name="lappland", description="Ask Lappland something")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(prompt="What do you want to ask?")
