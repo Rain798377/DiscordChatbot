@@ -5,9 +5,20 @@ import os
 from openai import OpenAI
 from discord import app_commands
 
-FOCUS_CHANNEL_ID = int(os.getenv("FOCUS_CHANNEL_ID"))
+# -------------------------
+# Env
+# -------------------------
+
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+focus_channel_raw = os.getenv("FOCUS_CHANNEL_ID")
+FOCUS_CHANNEL_ID = int(focus_channel_raw) if focus_channel_raw else None
+
+if not DISCORD_TOKEN:
+    raise RuntimeError("Missing DISCORD_TOKEN")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Missing OPENAI_API_KEY")
 
 # -------------------------
 # Pricing
@@ -26,27 +37,32 @@ WARNING_THRESHOLD = 0.80
 COST_FILE = "cost.json"
 
 if os.path.exists(COST_FILE):
-    with open(COST_FILE, "r") as f:
+    with open(COST_FILE, "r", encoding="utf-8") as f:
         cost_data = json.load(f)
 else:
     cost_data = {
         "total_cost": 0.0,
         "requests": 0,
-        "tokens_used": 0
+        "tokens_used": 0,
     }
 
-total_cost_usd = cost_data["total_cost"]
-total_requests = cost_data["requests"]
-total_tokens = cost_data["tokens_used"]
+total_cost_usd = float(cost_data.get("total_cost", 0.0))
+total_requests = int(cost_data.get("requests", 0))
+total_tokens = int(cost_data.get("tokens_used", 0))
 
 
 def save_cost():
-    with open(COST_FILE, "w") as f:
-        json.dump({
-            "total_cost": total_cost_usd,
-            "requests": total_requests,
-            "tokens_used": total_tokens
-        }, f, indent=2)
+    with open(COST_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "total_cost": total_cost_usd,
+                "requests": total_requests,
+                "tokens_used": total_tokens,
+            },
+            f,
+            indent=2,
+        )
+
 
 # -------------------------
 # Memory config
@@ -56,14 +72,16 @@ MEMORY_FILE = "memory.json"
 MAX_HISTORY = 15
 
 if os.path.exists(MEMORY_FILE):
-    with open(MEMORY_FILE, "r", encoding="utf8") as f:
+    with open(MEMORY_FILE, "r", encoding="utf-8") as f:
         memory = json.load(f)
 else:
     memory = {}
 
+
 def save_memory():
-    with open(MEMORY_FILE, "w", encoding="utf8") as f:
-        json.dump(memory, f, indent=2)
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, indent=2, ensure_ascii=False)
+
 
 # -------------------------
 # User profiles
@@ -72,22 +90,25 @@ def save_memory():
 PROFILE_FILE = "profiles.json"
 
 if os.path.exists(PROFILE_FILE):
-    with open(PROFILE_FILE, "r") as f:
+    with open(PROFILE_FILE, "r", encoding="utf-8") as f:
         profiles = json.load(f)
 else:
     profiles = {"users": {}}
 
-def save_profiles():
-    with open(PROFILE_FILE, "w") as f:
-        json.dump(profiles, f, indent=2)
 
-def get_profile(user_id):
+def save_profiles():
+    with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, indent=2, ensure_ascii=False)
+
+
+def get_profile(user_id: int):
     uid = str(user_id)
 
     if uid not in profiles["users"]:
         profiles["users"][uid] = {"facts": []}
 
     return profiles["users"][uid]
+
 
 # -------------------------
 # Keywords that trigger memory learning
@@ -101,26 +122,39 @@ MEMORY_KEYWORDS = [
     "i work",
     "i study",
     "i prefer",
-    "i enjoy"
+    "i enjoy",
 ]
 
 # -------------------------
 
 ai = OpenAI(api_key=OPENAI_API_KEY)
 
+
+class MyClient(discord.Client):
+    def __init__(self, *, intents: discord.Intents):
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        # Global sync so the command can exist in servers + user installs.
+        synced = await self.tree.sync()
+        print(f"Synced {len(synced)} global app commands")
+
+
 intents = discord.Intents.default()
 intents.message_content = True
-client = discord.Client(intents=intents)
 
-# create app command tree
-tree = app_commands.CommandTree(client)
+client = MyClient(intents=intents)
+tree = client.tree
 
 # -------------------------
+
 
 def calculate_cost(usage):
     input_cost = (usage.prompt_tokens / 1_000_000) * COST_PER_1M_INPUT
     output_cost = (usage.completion_tokens / 1_000_000) * COST_PER_1M_OUTPUT
     return input_cost + output_cost
+
 
 # -------------------------
 # Auto memory extraction
@@ -138,19 +172,23 @@ async def extract_user_facts(user_id, text):
         messages=[
             {
                 "role": "system",
-                "content":
-                "Extract permanent facts about the user from the message. "
-                "Return JSON list. Example: [\"User likes rhythm games\"]. "
-                "If nothing useful return []."
+                "content": (
+                    "Extract permanent facts about the user from the message. "
+                    'Return a JSON array of strings. Example: ["User likes rhythm games"]. '
+                    "If nothing useful, return []."
+                ),
             },
-            {"role": "user", "content": text}
+            {"role": "user", "content": text},
         ],
-        max_tokens=50
+        max_tokens=50,
     )
 
     try:
-        facts = json.loads(response.choices[0].message.content)
-    except:
+        content = response.choices[0].message.content or "[]"
+        facts = json.loads(content)
+        if not isinstance(facts, list):
+            return
+    except Exception:
         return
 
     if not facts:
@@ -159,70 +197,53 @@ async def extract_user_facts(user_id, text):
     profile = get_profile(user_id)
 
     for fact in facts:
-        if fact not in profile["facts"]:
+        if isinstance(fact, str) and fact not in profile["facts"]:
             profile["facts"].append(fact)
 
     profile["facts"] = profile["facts"][-5:]
     save_profiles()
 
+
 # -------------------------
-# GPT STREAMING
+# GPT response
 # -------------------------
 
-async def ask_gpt_stream(channel_id, user_id, prompt):
+async def ask_gpt(channel_id, user_id, prompt):
     history = memory.get(str(channel_id), [])
     profile = get_profile(user_id)
 
-    profile_text = "Known user facts:\n"
-    for fact in profile["facts"]:
-        profile_text += f"- {fact}\n"
+    profile_lines = "\n".join(f"- {fact}" for fact in profile["facts"])
+    profile_text = "Known user facts:\n" + (profile_lines if profile_lines else "- None yet")
 
     messages = [
         {
             "role": "system",
-            "content":
-            "You are Lappland, a sarcastic but mostly helpful Discord bot. "
-            "You answer questions clearly but often include humor, memes, or jokes."
+            "content": (
+                "You are Lappland, a sarcastic but mostly helpful Discord bot. "
+                "You answer questions clearly but often include humor, memes, or jokes."
+            ),
         },
-        {"role": "system", "content": profile_text}
-    ] + history + [
-        {"role": "user", "content": prompt}
+        {"role": "system", "content": profile_text},
+        *history,
+        {"role": "user", "content": prompt},
     ]
 
     response = await asyncio.to_thread(
         ai.chat.completions.create,
         model="gpt-4o-mini",
         messages=messages,
-        max_tokens=125
+        max_tokens=125,
     )
 
-    reply = response.choices[0].message.content
+    reply = response.choices[0].message.content or "..."
     cost = calculate_cost(response.usage)
+    return reply, cost, response.usage
 
-    partial = ""
-    last_update = asyncio.get_event_loop().time()
-
-    for word in reply.split():
-        partial += word + " "
-        now = asyncio.get_event_loop().time()
-
-        if now - last_update > 0.5:
-            yield partial.strip(), None
-            last_update = now
-
-    yield reply, cost
-
-    history.append({"role": "user", "content": prompt})
-    history.append({"role": "assistant", "content": reply})
-
-    history = history[-MAX_HISTORY:]
-    memory[str(channel_id)] = history
-    save_memory()
 
 # -------------------------
 
 def maybe_append_warning(text):
-    used_pct = total_cost_usd / MONTHLY_BUDGET_USD
+    used_pct = total_cost_usd / MONTHLY_BUDGET_USD if MONTHLY_BUDGET_USD > 0 else 0
     remaining = MONTHLY_BUDGET_USD - total_cost_usd
 
     if used_pct >= WARNING_THRESHOLD:
@@ -234,12 +255,13 @@ def maybe_append_warning(text):
 
     return text
 
+
 # -------------------------
 # Shared response handler
 # -------------------------
 
 async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_message):
-    global total_cost_usd
+    global total_cost_usd, total_requests, total_tokens
 
     if total_cost_usd >= MONTHLY_BUDGET_USD:
         await send_initial("❌ OpenAI budget exhausted. Message @Rain798377")
@@ -247,22 +269,43 @@ async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_messa
 
     await extract_user_facts(user_id, prompt)
 
-    cost = None
     msg = await send_initial("...")
 
-    async for partial, c in ask_gpt_stream(channel_id, user_id, prompt):
-        if len(partial) > 1900:
-            partial = partial[:1900]
+    reply, cost, usage = await ask_gpt(channel_id, user_id, prompt)
 
-        await edit_message(msg, maybe_append_warning(partial))
+    # Fake streaming via edits
+    partial = ""
+    last_update = asyncio.get_running_loop().time()
 
-        if c is not None:
-            cost = c
+    for word in reply.split():
+        partial += word + " "
+        now = asyncio.get_running_loop().time()
 
-    if cost is not None:
-        total_cost_usd = round(total_cost_usd + cost, 6)
-        save_cost()
-        print(f"[cost] +${cost:.6f} | total ${total_cost_usd:.6f}")
+        if now - last_update > 0.5:
+            shown = maybe_append_warning(partial.strip()[:1900])
+            await edit_message(msg, shown)
+            last_update = now
+
+    final_text = maybe_append_warning(reply[:1900])
+    await edit_message(msg, final_text)
+
+    # Save history after successful response
+    history = memory.get(str(channel_id), [])
+    history.append({"role": "user", "content": prompt})
+    history.append({"role": "assistant", "content": reply})
+    memory[str(channel_id)] = history[-MAX_HISTORY:]
+    save_memory()
+
+    total_cost_usd = round(total_cost_usd + cost, 6)
+    total_requests += 1
+    total_tokens += int(getattr(usage, "total_tokens", 0))
+    save_cost()
+
+    print(
+        f"[cost] +${cost:.6f} | total ${total_cost_usd:.6f} | "
+        f"req {total_requests} | tokens {total_tokens}"
+    )
+
 
 # -------------------------
 
@@ -272,54 +315,61 @@ async def on_ready():
     print(f"Loaded memory for {len(memory)} channels")
     print(f"Current spending: ${total_cost_usd:.6f}")
 
-    try:
-        synced = await tree.sync()
-        print(f"Synced {len(synced)} app commands")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
 
 # -------------------------
-# Slash command / app command
+# Slash / app command
 # -------------------------
 
 @tree.command(name="lappland", description="Ask Lappland something")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(prompt="What do you want to ask?")
 async def lappland_command(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+
+    channel_id = interaction.channel_id or interaction.user.id
+
     async def send_initial(text):
-        await interaction.response.send_message(text)
-        return await interaction.original_response()
+        return await interaction.followup.send(text)
 
     async def edit_message(msg, text):
         await msg.edit(content=text)
 
     try:
         await run_bot_response(
-            channel_id=interaction.channel_id,
+            channel_id=channel_id,
             user_id=interaction.user.id,
             prompt=prompt,
             send_initial=send_initial,
-            edit_message=edit_message
+            edit_message=edit_message,
         )
     except Exception as e:
-        print(e)
-        if interaction.response.is_done():
+        print(f"Slash command error: {e}")
+        try:
             await interaction.followup.send("GPT error. @Rain798377")
-        else:
-            await interaction.response.send_message("GPT error. @Rain798377")
+        except Exception:
+            pass
+
 
 # -------------------------
 
 @client.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
     prompt = None
 
-    if message.channel.id == FOCUS_CHANNEL_ID:
-        prompt = message.content
+    # Allow plain text DMs to the bot
+    if isinstance(message.channel, discord.DMChannel):
+        prompt = message.content.strip()
 
-    elif client.user in message.mentions:
+    # Focus channel in a server
+    elif FOCUS_CHANNEL_ID is not None and message.channel.id == FOCUS_CHANNEL_ID:
+        prompt = message.content.strip()
+
+    # Mention trigger in a server / group channel
+    elif client.user and client.user in message.mentions:
         prompt = message.content
         prompt = prompt.replace(f"<@{client.user.id}>", "")
         prompt = prompt.replace(f"<@!{client.user.id}>", "").strip()
@@ -329,9 +379,7 @@ async def on_message(message):
 
     if message.reference:
         try:
-            replied_message = await message.channel.fetch_message(
-                message.reference.message_id
-            )
+            replied_message = await message.channel.fetch_message(message.reference.message_id)
 
             replied_text = replied_message.content.strip()
             replied_author = replied_message.author.display_name
@@ -358,12 +406,13 @@ async def on_message(message):
                 user_id=message.author.id,
                 prompt=prompt,
                 send_initial=send_initial,
-                edit_message=edit_message
+                edit_message=edit_message,
             )
 
         except Exception as e:
-            print(e)
+            print(f"Message handler error: {e}")
             await message.channel.send("GPT error. @Rain798377")
+
 
 # -------------------------
 
