@@ -232,7 +232,7 @@ async def ask_gpt(channel_id, user_id, prompt):
         ai.chat.completions.create,
         model="gpt-4o-mini",
         messages=messages,
-        max_tokens=125,
+        max_tokens=150,
     )
 
     reply = response.choices[0].message.content or "..."
@@ -281,7 +281,7 @@ async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_messa
         partial += word + " "
         now = asyncio.get_running_loop().time()
 
-        if now - last_update > 0.5:
+        if now - last_update > 0.4:
             shown = maybe_append_warning(partial.strip()[:1900])
             await edit_message(msg, shown)
             last_update = now
