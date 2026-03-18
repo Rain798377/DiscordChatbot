@@ -3,9 +3,11 @@ import asyncio
 import json
 import os
 from openai import OpenAI
-import os
+from discord import app_commands
 
 FOCUS_CHANNEL_ID = int(os.getenv("FOCUS_CHANNEL_ID"))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # -------------------------
 # Pricing
@@ -80,7 +82,6 @@ def save_profiles():
         json.dump(profiles, f, indent=2)
 
 def get_profile(user_id):
-
     uid = str(user_id)
 
     if uid not in profiles["users"]:
@@ -105,11 +106,14 @@ MEMORY_KEYWORDS = [
 
 # -------------------------
 
-ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ai = OpenAI(api_key=OPENAI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
+
+# create app command tree
+tree = app_commands.CommandTree(client)
 
 # -------------------------
 
@@ -123,7 +127,6 @@ def calculate_cost(usage):
 # -------------------------
 
 async def extract_user_facts(user_id, text):
-
     lowered = text.lower()
 
     if not any(k in lowered for k in MEMORY_KEYWORDS):
@@ -160,7 +163,6 @@ async def extract_user_facts(user_id, text):
             profile["facts"].append(fact)
 
     profile["facts"] = profile["facts"][-5:]
-
     save_profiles()
 
 # -------------------------
@@ -168,7 +170,6 @@ async def extract_user_facts(user_id, text):
 # -------------------------
 
 async def ask_gpt_stream(channel_id, user_id, prompt):
-
     history = memory.get(str(channel_id), [])
     profile = get_profile(user_id)
 
@@ -203,7 +204,6 @@ async def ask_gpt_stream(channel_id, user_id, prompt):
 
     for word in reply.split():
         partial += word + " "
-
         now = asyncio.get_event_loop().time()
 
         if now - last_update > 0.5:
@@ -222,7 +222,6 @@ async def ask_gpt_stream(channel_id, user_id, prompt):
 # -------------------------
 
 def maybe_append_warning(text):
-
     used_pct = total_cost_usd / MONTHLY_BUDGET_USD
     remaining = MONTHLY_BUDGET_USD - total_cost_usd
 
@@ -236,6 +235,36 @@ def maybe_append_warning(text):
     return text
 
 # -------------------------
+# Shared response handler
+# -------------------------
+
+async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_message):
+    global total_cost_usd
+
+    if total_cost_usd >= MONTHLY_BUDGET_USD:
+        await send_initial("❌ OpenAI budget exhausted. Message @Rain798377")
+        return
+
+    await extract_user_facts(user_id, prompt)
+
+    cost = None
+    msg = await send_initial("...")
+
+    async for partial, c in ask_gpt_stream(channel_id, user_id, prompt):
+        if len(partial) > 1900:
+            partial = partial[:1900]
+
+        await edit_message(msg, maybe_append_warning(partial))
+
+        if c is not None:
+            cost = c
+
+    if cost is not None:
+        total_cost_usd = round(total_cost_usd + cost, 6)
+        save_cost()
+        print(f"[cost] +${cost:.6f} | total ${total_cost_usd:.6f}")
+
+# -------------------------
 
 @client.event
 async def on_ready():
@@ -243,22 +272,51 @@ async def on_ready():
     print(f"Loaded memory for {len(memory)} channels")
     print(f"Current spending: ${total_cost_usd:.6f}")
 
+    try:
+        synced = await tree.sync()
+        print(f"Synced {len(synced)} app commands")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+
+# -------------------------
+# Slash command / app command
+# -------------------------
+
+@tree.command(name="lappland", description="Ask Lappland something")
+@app_commands.describe(prompt="What do you want to ask?")
+async def lappland_command(interaction: discord.Interaction, prompt: str):
+    async def send_initial(text):
+        await interaction.response.send_message(text)
+        return await interaction.original_response()
+
+    async def edit_message(msg, text):
+        await msg.edit(content=text)
+
+    try:
+        await run_bot_response(
+            channel_id=interaction.channel_id,
+            user_id=interaction.user.id,
+            prompt=prompt,
+            send_initial=send_initial,
+            edit_message=edit_message
+        )
+    except Exception as e:
+        print(e)
+        if interaction.response.is_done():
+            await interaction.followup.send("GPT error. @Rain798377")
+        else:
+            await interaction.response.send_message("GPT error. @Rain798377")
+
 # -------------------------
 
 @client.event
 async def on_message(message):
-    global total_cost_usd
-
     if message.author.bot:
-        return
-
-    if total_cost_usd >= MONTHLY_BUDGET_USD:
-        await message.channel.send("❌ OpenAI budget exhausted. Message @Rain798377")
         return
 
     prompt = None
 
-    if message.channel.id == int(os.getenv("FOCUS_CHANNEL_ID")):
+    if message.channel.id == FOCUS_CHANNEL_ID:
         prompt = message.content
 
     elif client.user in message.mentions:
@@ -287,32 +345,21 @@ async def on_message(message):
         except Exception as e:
             print(f"Failed to fetch replied message: {e}")
 
-    await extract_user_facts(message.author.id, prompt)
-
     async with message.channel.typing():
         try:
-            msg = await message.channel.send("...")
+            async def send_initial(text):
+                return await message.channel.send(text)
 
-            cost = None
+            async def edit_message(msg, text):
+                await msg.edit(content=text)
 
-            async for partial, c in ask_gpt_stream(
-                message.channel.id,
-                message.author.id,
-                prompt
-            ):
-                if len(partial) > 1900:
-                    break
-
-                await msg.edit(content=maybe_append_warning(partial))
-
-                if c is not None:
-                    cost = c
-
-            if cost is not None:
-                total_cost_usd = round(total_cost_usd + cost, 6)
-                save_cost()
-
-                print(f"[cost] +${cost:.6f} | total ${total_cost_usd:.6f}")
+            await run_bot_response(
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                prompt=prompt,
+                send_initial=send_initial,
+                edit_message=edit_message
+            )
 
         except Exception as e:
             print(e)
@@ -320,4 +367,4 @@ async def on_message(message):
 
 # -------------------------
 
-client.run(os.getenv("DISCORD_TOKEN"))
+client.run(DISCORD_TOKEN)
