@@ -320,10 +320,43 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
+@tree.command(name="lappland", description="Ask Lappland something")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@app_commands.describe(prompt="What do you want to ask?")
+async def lappland_command(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+
+    channel_id = interaction.channel_id or interaction.user.id
+
+    async def send_initial(text):
+        return await interaction.followup.send(text)
+
+    async def edit_message(msg, text):
+        await msg.edit(content=text)
+
+    try:
+        await run_bot_response(
+            channel_id=channel_id,
+            user_id=interaction.user.id,
+            prompt=prompt,
+            send_initial=send_initial,
+            edit_message=edit_message,
+        )
+    except Exception as e:
+        print(f"Slash command error: {e}")
+        try:
+            await interaction.followup.send("GPT error. @Rain798377")
+        except Exception:
+            pass
+
 @tree.context_menu(name="Ask Lappland")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-async def ask_lappland_on_message(interaction: discord.Interaction, message: discord.Message):
+async def ask_lappland_on_message(
+    interaction: discord.Interaction,
+    message: discord.Message
+):
     await interaction.response.defer()
 
     replied_text = (message.content or "").strip()
