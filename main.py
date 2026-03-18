@@ -51,7 +51,7 @@ def save_cost():
 # -------------------------
 
 MEMORY_FILE = "memory.json"
-MAX_HISTORY = 30
+MAX_HISTORY = 15
 
 if os.path.exists(MEMORY_FILE):
     with open(MEMORY_FILE, "r", encoding="utf8") as f:
@@ -159,7 +159,7 @@ async def extract_user_facts(user_id, text):
         if fact not in profile["facts"]:
             profile["facts"].append(fact)
 
-    profile["facts"] = profile["facts"][-20:]
+    profile["facts"] = profile["facts"][-5:]
 
     save_profiles()
 
@@ -192,7 +192,7 @@ async def ask_gpt_stream(channel_id, user_id, prompt):
         ai.chat.completions.create,
         model="gpt-4o-mini",
         messages=messages,
-        max_tokens=200
+        max_tokens=125
     )
 
     reply = response.choices[0].message.content
