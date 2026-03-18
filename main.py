@@ -320,36 +320,26 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
-@tree.command(name="lappland", description="Ask Lappland something")
+@tree.context_menu(name="Ask Lappland")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.describe(prompt="What do you want to ask?")
-async def lappland_command(interaction: discord.Interaction, prompt: str):
+async def ask_lappland_on_message(interaction: discord.Interaction, message: discord.Message):
     await interaction.response.defer()
 
-    replied_text = None
-    replied_author = None
-
-    # check if user replied to a message
-    if interaction.channel and interaction.channel.last_message:
-        if interaction.channel.last_message.reference:
-            try:
-                replied = await interaction.channel.fetch_message(
-                    interaction.channel.last_message.reference.message_id
-                )
-                replied_text = replied.content
-                replied_author = replied.author.display_name
-            except:
-                pass
+    replied_text = (message.content or "").strip()
+    replied_author = message.author.display_name
 
     if replied_text:
-        full_prompt = (
+        prompt = (
             f"{replied_author} said:\n"
             f"\"{replied_text}\"\n\n"
-            f"User request:\n{prompt}"
+            f"User request:\nRespond to that message."
         )
     else:
-        full_prompt = prompt
+        prompt = (
+            f"{replied_author} sent a message with no text content.\n\n"
+            f"User request:\nRespond to that message."
+        )
 
     channel_id = interaction.channel_id or interaction.user.id
 
@@ -363,13 +353,16 @@ async def lappland_command(interaction: discord.Interaction, prompt: str):
         await run_bot_response(
             channel_id=channel_id,
             user_id=interaction.user.id,
-            prompt=full_prompt,
+            prompt=prompt,
             send_initial=send_initial,
-            edit_message=edit_message
+            edit_message=edit_message,
         )
     except Exception as e:
-        print(e)
-        await interaction.followup.send("GPT error. @Rain798377")
+        print(f"Context menu error: {e}")
+        try:
+            await interaction.followup.send("GPT error. @Rain798377")
+        except Exception:
+            pass
 
 # -------------------------
 
