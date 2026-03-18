@@ -320,38 +320,76 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
-@tree.command(name="lappland", description="Ask Lappland something")
-@app_commands.allowed_installs(guilds=True, users=True)
-@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-@app_commands.describe(prompt="What do you want to ask?")
-async def lappland_command(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
+# -------------------------
+# Modal class
+# -------------------------
 
-    channel_id = interaction.channel_id or interaction.user.id
+class ReplyToMessageModal(discord.ui.Modal, title="Ask Lappland About Message"):
+    prompt = discord.ui.TextInput(
+        label="What do you want Lappland to do?",
+        placeholder="Explain it, reply to it, summarize it, roast it...",
+        max_length=300,
+    )
 
-    async def send_initial(text):
-        return await interaction.followup.send(text)
+    def __init__(self, target_message: discord.Message):
+        super().__init__()
+        self.target_message = target_message
 
-    async def edit_message(msg, text):
-        await msg.edit(content=text)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
 
-    try:
-        await run_bot_response(
-            channel_id=channel_id,
-            user_id=interaction.user.id,
-            prompt=prompt,
-            send_initial=send_initial,
-            edit_message=edit_message,
-        )
-    except Exception as e:
-        print(f"Slash command error: {e}")
+        replied_text = (self.target_message.content or "").strip()
+        replied_author = self.target_message.author.display_name
+        user_prompt = self.prompt.value.strip() # The user's instruction in the modal stripped of leading/trailing whitespace
+
+        if replied_text:
+            full_prompt = (
+                f"{replied_author} said:\n"
+                f"\"{replied_text}\"\n\n"
+                f"User request:\n{user_prompt}"
+            )
+        else:
+            full_prompt = (
+                f"{replied_author} sent a message with no text content.\n\n"
+                f"User request:\n{user_prompt}"
+            )
+
+        channel_id = interaction.channel_id or interaction.user.id
+
+        async def send_initial(text):
+            return await interaction.followup.send(text)
+
+        async def edit_message(msg, text):
+            await msg.edit(content=text)
+
         try:
-            await interaction.followup.send("GPT error. @Rain798377")
-        except Exception:
-            pass
+            await run_bot_response(
+                channel_id=channel_id,
+                user_id=interaction.user.id,
+                prompt=full_prompt,
+                send_initial=send_initial,
+                edit_message=edit_message,
+            )
+        except Exception as e:
+            print(f"Modal/context error: {e}")
+            try:
+                await interaction.followup.send("GPT error. @Rain798377")
+            except Exception:
+                pass
 
 
 # -------------------------
+# Context menu command
+# -------------------------
+
+@tree.context_menu(name="Ask Lappland About Message")
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+async def ask_lappland_about_message(interaction: discord.Interaction, message: discord.Message):
+    await interaction.response.send_modal(ReplyToMessageModal(message))
+
+# -------------------------
+
 
 @client.event
 async def on_message(message: discord.Message):
