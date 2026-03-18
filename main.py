@@ -320,73 +320,56 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
-# -------------------------
-# Modal class
-# -------------------------
-
-class ReplyToMessageModal(discord.ui.Modal, title="Ask Lappland About Message"):
-    prompt = discord.ui.TextInput(
-        label="What do you want Lappland to do?",
-        placeholder="Explain it, reply to it, summarize it, roast it...",
-        max_length=300,
-    )
-
-    def __init__(self, target_message: discord.Message):
-        super().__init__()
-        self.target_message = target_message
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
-        replied_text = (self.target_message.content or "").strip()
-        replied_author = self.target_message.author.display_name
-        user_prompt = self.prompt.value.strip() # The user's instruction in the modal stripped of leading/trailing whitespace
-
-        if replied_text:
-            full_prompt = (
-                f"{replied_author} said:\n"
-                f"\"{replied_text}\"\n\n"
-                f"User request:\n{user_prompt}"
-            )
-        else:
-            full_prompt = (
-                f"{replied_author} sent a message with no text content.\n\n"
-                f"User request:\n{user_prompt}"
-            )
-
-        channel_id = interaction.channel_id or interaction.user.id
-
-        async def send_initial(text):
-            return await interaction.followup.send(text)
-
-        async def edit_message(msg, text):
-            await msg.edit(content=text)
-
-        try:
-            await run_bot_response(
-                channel_id=channel_id,
-                user_id=interaction.user.id,
-                prompt=full_prompt,
-                send_initial=send_initial,
-                edit_message=edit_message,
-            )
-        except Exception as e:
-            print(f"Modal/context error: {e}")
-            try:
-                await interaction.followup.send("GPT error. @Rain798377")
-            except Exception:
-                pass
-
-
-# -------------------------
-# Context menu command
-# -------------------------
-
-@tree.context_menu(name="Ask Lappland About Message")
+@tree.command(name="lappland", description="Ask Lappland something")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-async def ask_lappland_about_message(interaction: discord.Interaction, message: discord.Message):
-    await interaction.response.send_modal(ReplyToMessageModal(message))
+@app_commands.describe(prompt="What do you want to ask?")
+async def lappland_command(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+
+    replied_text = None
+    replied_author = None
+
+    # check if user replied to a message
+    if interaction.channel and interaction.channel.last_message:
+        if interaction.channel.last_message.reference:
+            try:
+                replied = await interaction.channel.fetch_message(
+                    interaction.channel.last_message.reference.message_id
+                )
+                replied_text = replied.content
+                replied_author = replied.author.display_name
+            except:
+                pass
+
+    if replied_text:
+        full_prompt = (
+            f"{replied_author} said:\n"
+            f"\"{replied_text}\"\n\n"
+            f"User request:\n{prompt}"
+        )
+    else:
+        full_prompt = prompt
+
+    channel_id = interaction.channel_id or interaction.user.id
+
+    async def send_initial(text):
+        return await interaction.followup.send(text)
+
+    async def edit_message(msg, text):
+        await msg.edit(content=text)
+
+    try:
+        await run_bot_response(
+            channel_id=channel_id,
+            user_id=interaction.user.id,
+            prompt=full_prompt,
+            send_initial=send_initial,
+            edit_message=edit_message
+        )
+    except Exception as e:
+        print(e)
+        await interaction.followup.send("GPT error. @Rain798377")
 
 # -------------------------
 
