@@ -320,11 +320,12 @@ async def on_ready():
 # Slash / app command
 # -------------------------
 
-@tree.command(name="lappland", description="Ask Lappland something")
+@tree.command(name="Lappland", description="Ask Lappland something")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.describe(prompt="What do you want to ask?")
 async def lappland_command(interaction: discord.Interaction, prompt: str):
+    print("slash command fired")
     await interaction.response.defer()
 
     channel_id = interaction.channel_id or interaction.user.id
@@ -344,11 +345,11 @@ async def lappland_command(interaction: discord.Interaction, prompt: str):
             edit_message=edit_message,
         )
     except Exception as e:
-        print(f"Slash command error: {e}")
+        print(f"Slash command error: {type(e).__name__}: {e}")
         try:
             await interaction.followup.send("GPT error. @Rain798377")
-        except Exception:
-            pass
+        except Exception as inner_e:
+            print(f"Followup send error: {type(inner_e).__name__}: {inner_e}")
 
 @tree.context_menu(name="Ask Lappland")
 @app_commands.allowed_installs(guilds=True, users=True)
