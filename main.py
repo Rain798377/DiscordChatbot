@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from openai import OpenAI
-from secret import DISCORD_TOKEN, OPENAI_API_KEY, FOCUS_CHANNEL_ID
+import os
 
 # -------------------------
 # Pricing
@@ -103,7 +103,7 @@ MEMORY_KEYWORDS = [
 
 # -------------------------
 
-ai = OpenAI(api_key=OPENAI_API_KEY)
+ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -257,7 +257,7 @@ async def on_message(message):
 
     prompt = None
 
-    if message.channel.id == FOCUS_CHANNEL_ID:
+    if message.channel.id == int(os.getenv("FOCUS_CHANNEL_ID")):
         prompt = message.content
 
     elif client.user in message.mentions:
@@ -304,4 +304,4 @@ async def on_message(message):
 
 # -------------------------
 
-client.run(DISCORD_TOKEN)
+client.run(os.getenv("DISCORD_TOKEN"))
