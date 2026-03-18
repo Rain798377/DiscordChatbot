@@ -3,7 +3,9 @@ import asyncio
 import json
 import os
 from openai import OpenAI
-from secret import DISCORD_TOKEN, OPENAI_API_KEY, FOCUS_CHANNEL_ID
+import os
+
+FOCUS_CHANNEL_ID = int(os.getenv("FOCUS_CHANNEL_ID"))
 
 # -------------------------
 # Pricing
@@ -103,7 +105,7 @@ MEMORY_KEYWORDS = [
 
 # -------------------------
 
-ai = OpenAI(api_key=OPENAI_API_KEY)
+ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -245,7 +247,6 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-
     global total_cost_usd
 
     if message.author.bot:
@@ -268,12 +269,28 @@ async def on_message(message):
     if not prompt:
         return
 
+    if message.reference:
+        try:
+            replied_message = await message.channel.fetch_message(
+                message.reference.message_id
+            )
+
+            replied_text = replied_message.content.strip()
+            replied_author = replied_message.author.display_name
+
+            if replied_text:
+                prompt = (
+                    f"{replied_author} said:\n"
+                    f"\"{replied_text}\"\n\n"
+                    f"User request:\n{prompt}"
+                )
+        except Exception as e:
+            print(f"Failed to fetch replied message: {e}")
+
     await extract_user_facts(message.author.id, prompt)
 
     async with message.channel.typing():
-
         try:
-
             msg = await message.channel.send("...")
 
             cost = None
@@ -283,17 +300,16 @@ async def on_message(message):
                 message.author.id,
                 prompt
             ):
-
                 if len(partial) > 1900:
                     break
 
                 await msg.edit(content=maybe_append_warning(partial))
 
-                if c:
+                if c is not None:
                     cost = c
 
-            if cost:
-                total_cost_usd += cost
+            if cost is not None:
+                total_cost_usd = round(total_cost_usd + cost, 6)
                 save_cost()
 
                 print(f"[cost] +${cost:.6f} | total ${total_cost_usd:.6f}")
@@ -304,4 +320,4 @@ async def on_message(message):
 
 # -------------------------
 
-client.run(DISCORD_TOKEN)
+client.run(os.getenv("DISCORD_TOKEN"))
