@@ -258,7 +258,7 @@ async def on_message(message):
 
     prompt = None
 
-    if message.channel.id == FOCUS_CHANNEL_ID:
+    if message.channel.id == int(os.getenv("FOCUS_CHANNEL_ID")):
         prompt = message.content
 
     elif client.user in message.mentions:
