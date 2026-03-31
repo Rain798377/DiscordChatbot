@@ -208,45 +208,6 @@ async def extract_user_facts(user_id, text):
 # GPT response
 # -------------------------
 
-# CHANGED: updated get_max_tokens with type hint, .strip(), extra keywords, and multi-question bump
-def get_max_tokens(user_message: str) -> int:
-    msg = user_message.lower().strip()
-    length = len(msg.split())
-    score = 0
-    # Length factor
-    if length > 40:
-        score += 2
-    elif length > 20:
-        score += 1
-    # Strong detail / essay intent
-    essay_keywords = [
-        "essay", "paper", "paragraph", "paragraphs",
-        "analysis", "analyze", "discuss",
-        "in depth", "in-depth", "detailed",
-        "explain in detail", "elaborate",
-        "write more", "long answer", "short essay"
-    ]
-    # Medium detail intent
-    medium_keywords = [
-        "explain", "why", "how", "details",
-        "tell me more", "more info"
-    ]
-    if any(word in msg for word in essay_keywords):
-        score += 3
-    if any(word in msg for word in medium_keywords):
-        score += 1
-    # Extra bump for question complexity
-    if msg.count("?") >= 2:
-        score += 1
-    # Final decision
-    if score >= 4:
-        return 750
-    elif score >= 2:
-        return 500
-    else:
-        return 350
-
-
 async def ask_gpt(channel_id, user_id, prompt):
     history = memory.get(str(channel_id), [])
     profile = get_profile(user_id)
@@ -271,18 +232,10 @@ async def ask_gpt(channel_id, user_id, prompt):
         ai.chat.completions.create,
         model="gpt-4o-mini",
         messages=messages,
-        # CHANGED: now uses get_max_tokens() for a dynamic limit instead of hardcoded 500
-        max_tokens=get_max_tokens(prompt),
+        max_tokens=150,
     )
 
     reply = response.choices[0].message.content or "..."
-
-    # CHANGED: warn in console and append a note to the reply if OpenAI cut off
-    # the response due to hitting the token limit (finish_reason "length")
-    if response.choices[0].finish_reason == "length":
-        print(f"[tokens] WARNING: response cut off by token limit (max_tokens={get_max_tokens(prompt)})")
-        reply += "\n\n\u26a0\ufe0f *(response cut off \u2014 hit token limit)*"
-
     cost = calculate_cost(response.usage)
     return reply, cost, response.usage
 
@@ -304,61 +257,6 @@ def maybe_append_warning(text):
 
 
 # -------------------------
-# CHANGED: markdown-aware reply splitter. Splits on newlines or spaces to avoid
-# cutting words in half, and carries open code fences (```lang) into the next
-# chunk so Discord doesn't break syntax highlighting across messages.
-# -------------------------
-
-DISCORD_LIMIT = 1900
-
-def split_reply(text: str, limit: int = DISCORD_LIMIT) -> list[str]:
-    chunks = []
-    open_fence = None  # tracks the current opening fence e.g. "```python"
-
-    while len(text) > limit:
-        window = text[:limit]
-
-        # Count how many times each fence opens/closes in this window so we
-        # know whether a code block is still open at the split point.
-        for line in window.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                if open_fence is None:
-                    # Opening a new fence — record it (with language if any)
-                    open_fence = stripped
-                else:
-                    # Closing the open fence
-                    open_fence = None
-
-        # Prefer splitting at the last newline so we don't cut mid-line
-        split_at = window.rfind("\n", 0, limit)
-        # Fall back to last space to avoid cutting mid-word
-        if split_at == -1:
-            split_at = window.rfind(" ", 0, limit)
-        # Last resort: hard cut (single token longer than limit)
-        if split_at == -1:
-            split_at = limit
-
-        chunk = text[:split_at].rstrip()
-
-        # If a code block is still open, close it before ending this chunk
-        if open_fence is not None:
-            chunk += "\n```"
-
-        chunks.append(chunk)
-        text = text[split_at:].lstrip()
-
-        # Re-open the fence at the start of the next chunk so highlighting continues
-        if open_fence is not None:
-            text = open_fence + "\n" + text
-
-    if text:
-        chunks.append(text)
-
-    return chunks
-
-
-# -------------------------
 # Shared response handler
 # -------------------------
 
@@ -375,8 +273,7 @@ async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_messa
 
     reply, cost, usage = await ask_gpt(channel_id, user_id, prompt)
 
-    # Fake streaming via edits — CHANGED: removed [:1900] truncation on partial,
-    # streaming only shows the first chunk live; full reply is split below.
+    # Fake streaming via edits
     partial = ""
     last_update = asyncio.get_running_loop().time()
 
@@ -385,22 +282,12 @@ async def run_bot_response(channel_id, user_id, prompt, send_initial, edit_messa
         now = asyncio.get_running_loop().time()
 
         if now - last_update > 0.4:
-            # Only stream the first DISCORD_LIMIT chars during the live edit phase
-            shown = maybe_append_warning(partial.strip()[:DISCORD_LIMIT])
+            shown = maybe_append_warning(partial.strip()[:1900])
             await edit_message(msg, shown)
             last_update = now
 
-    # CHANGED: use split_reply so chunks break on newlines/spaces and open
-    # code fences are closed + re-opened across chunk boundaries.
-    final_text = maybe_append_warning(reply)
-    chunks = split_reply(final_text)
-
-    # Edit the placeholder with the first chunk
-    await edit_message(msg, chunks[0])
-
-    # Send any overflow chunks as additional messages
-    for chunk in chunks[1:]:
-        await send_initial(chunk)
+    final_text = maybe_append_warning(reply[:1900])
+    await edit_message(msg, final_text)
 
     # Save history after successful response
     history = memory.get(str(channel_id), [])
